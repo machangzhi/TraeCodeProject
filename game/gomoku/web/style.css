@@ -126,3 +126,113 @@ body {
 .controls button.primary:hover {
   background: #ebb872;
 }
+
+/* 模式切换 */
+.mode-bar {
+  display: flex;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.mode-btn {
+  border: none;
+  background: transparent;
+  color: #c3c5dc;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 7px 20px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mode-btn.active {
+  background: #e0a458;
+  color: #2b2010;
+}
+
+/* 棋谱弹窗 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 24, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 10;
+}
+
+.modal-mask[hidden] {
+  display: none;
+}
+
+.modal {
+  width: min(92vw, 460px);
+  background: #26283d;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.modal h2 {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+
+.modal textarea {
+  width: 100%;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #1b1c2c;
+  color: #e9e9f2;
+  font-family: Consolas, Menlo, monospace;
+  font-size: 13px;
+  padding: 10px;
+  line-height: 1.5;
+}
+
+.modal-hint {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #9aa0c0;
+}
+
+.modal-hint.error {
+  color: #ff7a85;
+}
+
+.modal-hint.success {
+  color: #7bd88f;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.modal-actions button {
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f1f1f5;
+  cursor: pointer;
+}
+
+.modal-actions button.primary {
+  background: #e0a458;
+  border-color: #e0a458;
+  color: #2b2010;
+}

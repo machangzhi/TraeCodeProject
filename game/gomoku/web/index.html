@@ -10,8 +10,13 @@
   <main class="app">
     <header class="header">
       <h1>五子棋</h1>
-      <p class="subtitle">鼠标点击棋盘交叉点落子，黑白轮流，五子连珠即胜</p>
+      <p class="subtitle">点击棋盘交叉点落子，黑白轮流，五子连珠即胜</p>
     </header>
+
+    <section class="mode-bar" role="group" aria-label="对战模式">
+      <button id="modePvp" type="button" class="mode-btn active">双人对战</button>
+      <button id="modePve" type="button" class="mode-btn">人机对战</button>
+    </section>
 
     <section class="status-bar">
       <span id="turnIcon" class="stone-icon black"></span>
@@ -25,8 +30,24 @@
     <section class="controls">
       <button id="undoBtn" type="button">悔棋</button>
       <button id="restartBtn" type="button" class="primary">重新开始</button>
+      <button id="exportBtn" type="button">导出棋谱</button>
+      <button id="importBtn" type="button">导入棋谱</button>
     </section>
   </main>
+
+  <div id="recordModal" class="modal-mask" hidden>
+    <div class="modal">
+      <h2 id="modalTitle">棋谱</h2>
+      <textarea id="recordText" rows="8" spellcheck="false"
+        placeholder="把棋谱文本粘贴到这里，再点“导入并对弈”"></textarea>
+      <p id="modalHint" class="modal-hint"></p>
+      <div class="modal-actions">
+        <button id="copyBtn" type="button">复制棋谱</button>
+        <button id="importApplyBtn" type="button" class="primary">导入并对弈</button>
+        <button id="modalCloseBtn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <script src="game.js"></script>
 </body>
