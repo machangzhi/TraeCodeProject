@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>五子棋 · 在线对弈</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <h1>五子棋</h1>
+      <p class="subtitle">鼠标点击棋盘交叉点落子，黑白轮流，五子连珠即胜</p>
+    </header>
+
+    <section class="status-bar">
+      <span id="turnIcon" class="stone-icon black"></span>
+      <span id="statusText">黑棋回合</span>
+    </section>
+
+    <div class="board-wrap">
+      <canvas id="board" aria-label="五子棋棋盘"></canvas>
+    </div>
+
+    <section class="controls">
+      <button id="undoBtn" type="button">悔棋</button>
+      <button id="restartBtn" type="button" class="primary">重新开始</button>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>

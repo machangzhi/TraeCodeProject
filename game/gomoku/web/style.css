@@ -1,0 +1,128 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: linear-gradient(160deg, #2b2d42 0%, #1a1b2e 100%);
+  color: #f1f1f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.app {
+  width: min(92vw, 560px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.header {
+  text-align: center;
+}
+
+.header h1 {
+  font-size: 30px;
+  letter-spacing: 8px;
+  text-indent: 8px;
+}
+
+.subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #a0a3bd;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 8px 20px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.stone-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.stone-icon.black {
+  background: radial-gradient(circle at 32% 30%, #6a6a6a, #0a0a0a 70%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.stone-icon.white {
+  background: radial-gradient(circle at 32% 30%, #ffffff, #c9c9d2 75%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.board-wrap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+}
+
+#board {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.controls {
+  display: flex;
+  gap: 14px;
+}
+
+.controls button {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 10px 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f1f1f5;
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+.controls button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.controls button:active {
+  transform: scale(0.96);
+}
+
+.controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.controls button.primary {
+  background: #e0a458;
+  border-color: #e0a458;
+  color: #2b2010;
+}
+
+.controls button.primary:hover {
+  background: #ebb872;
+}
