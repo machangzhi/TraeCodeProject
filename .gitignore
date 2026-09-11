@@ -1,2 +1,7 @@
 # 本地 IDE 配置
 .trae/
+
+# Python 缓存与字节码
+__pycache__/
+*.py[cod]
+.pytest_cache/
