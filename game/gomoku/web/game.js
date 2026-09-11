@@ -189,7 +189,9 @@
       while (inBoard(r2 - dr, c2 - dc) && grid[r2 - dr][c2 - dc] === player) {
         r2 -= dr; c2 -= dc;
       }
-      var count = Math.abs(r1 - r2) + Math.abs(c1 - c2) + 1;
+      // 注意：必须用切比雪夫距离（max），不能用曼哈顿距离，
+      // 否则斜向步数会被算成两倍，导致斜向三子误判为五连。
+      var count = Math.max(Math.abs(r1 - r2), Math.abs(c1 - c2)) + 1;
       if (count >= 5) {
         return { r1: r1, c1: c1, r2: r2, c2: c2 };
       }

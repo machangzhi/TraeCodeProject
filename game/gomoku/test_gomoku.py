@@ -88,6 +88,22 @@ class BoardTest(unittest.TestCase):
             self.board.place(5, c, BLACK)
         self.assertIsNone(self.board.winner_at(5, 3))
 
+    def test_three_diagonal_is_not_win(self):
+        # 斜向三子绝不能判胜（回归：曼哈顿距离会把斜向步数翻倍）
+        for i in range(3):
+            self.board.place(i, i, BLACK)
+        self.assertIsNone(self.board.winner_at(2, 2))
+
+    def test_four_diagonal_is_not_win(self):
+        for i in range(4):
+            self.board.place(i, i, WHITE)
+        self.assertIsNone(self.board.winner_at(3, 3))
+
+    def test_three_anti_diagonal_is_not_win(self):
+        for i in range(3):
+            self.board.place(i, 4 - i, BLACK)
+        self.assertIsNone(self.board.winner_at(2, 2))
+
     def test_winner_at_empty_cell(self):
         self.assertIsNone(self.board.winner_at(0, 0))
 
