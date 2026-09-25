@@ -50,8 +50,8 @@ async function send() {
       body: JSON.stringify({ messages: messages.value }),
     })
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status} `)
-}
+      throw new Error(`HTTP ${res.status}`)
+    }
     const data = await res.json()
     messages.value.push({ role: 'assistant', content: data.reply })
     scrollToBottom()
@@ -60,12 +60,7 @@ async function send() {
     scrollToBottom()
   } finally {
     loading.value = false
-}
-
-
-
-
-
+  }
 }
 </script>
 
