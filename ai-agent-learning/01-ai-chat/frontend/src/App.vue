@@ -4,6 +4,9 @@ import { ref, nextTick } from 'vue'
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  // 标记请求失败/空回复的消息：仅用于界面提示，组装请求历史时必须过滤掉，
+  // 不能把“请求失败”这类客户端文案或半截残文当作模型回复发给 LLM
+  isError?: boolean
 }
 
 // 消息列表，初始为空
@@ -30,33 +33,73 @@ async function send() {
   const text = input.value.trim()
   if (!text || loading.value) return
 
-  // TODO(Day3·你来写)：
-  // 1. 把用户消息加入 messages 列表（role: 'user', content: text）
+  // 先把用户消息入列，再占位一条空的 AI 消息，流式过程中往里追加文字
   messages.value.push({ role: 'user', content: text })
   scrollToBottom()
-  // 2. 清空输入框 input
   input.value = ''
-  // 3. loading.value = true
   loading.value = true
-  // 4. 调接口 POST /api/chat，body: { messages: messages.value }
-  //    注意：fetch 的 URL 写 '/api/chat'（相对路径，Vite 会代理到 3000）
-  // 5. 拿到响应里的 reply，作为 assistant 消息追加到 messages
-  // 6. 出错时也要给用户反馈（比如追加一条 "请求失败" 的 assistant 消息）
-  // 7. finally 里 loading.value = false
+
+  messages.value.push({ role: 'assistant', content: '' })
+  const aiIndex = messages.value.length - 1
+
   try {
-    const res = await fetch('/api/chat', {
+    // EventSource 只支持 GET、发不了 POST body，所以用 fetch 手动读流
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: messages.value }),
+      // 只发本轮占位之前的历史，并剔除历次失败/中断消息，避免污染上下文
+      body: JSON.stringify({
+        messages: messages.value
+          .filter((_, i) => i < aiIndex)
+          .filter((m) => !m.isError),
+      }),
     })
-    if (!res.ok) {
+    if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}`)
     }
-    const data = await res.json()
-    messages.value.push({ role: 'assistant', content: data.reply })
-    scrollToBottom()
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      // stream: true：处理被网络分包切断的多字节中文字符
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE 消息以空行（\n\n）分隔；最后一段可能是半条消息，留在 buffer 等下一包
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+
+      for (const part of parts) {
+        const line = part.trim()
+        if (!line.startsWith('data:')) continue
+        const payload = line.slice(5).trim()
+        if (payload === '[DONE]') break
+        const data = JSON.parse(payload)
+        if (data.error) throw new Error(data.error)
+        if (data.delta) {
+          messages.value[aiIndex].content += data.delta
+          scrollToBottom()
+        }
+      }
+    }
+
+    // 整流没有任何 delta（如内容被审核拦截、finish_reason=content_filter），
+    // 给占位气泡兜底提示并标记错误，避免空白气泡残留，也防止空消息进入下一轮历史
+    if (!messages.value[aiIndex].content) {
+      messages.value[aiIndex].content = '（模型未返回内容）'
+      messages.value[aiIndex].isError = true
+    }
   } catch (error) {
-    messages.value.push({ role: 'assistant', content: '请求失败' })
+    // 统一在占位气泡上提示：无内容直接显示失败；已有半截内容则追加中断说明。
+    // 两种情况都打 isError，下一轮组装请求历史时会被过滤，不会污染上下文
+    const ai = messages.value[aiIndex]
+    ai.content = ai.content
+      ? `${ai.content}\n（请求中断，以上内容未计入对话历史）`
+      : '请求失败'
+    ai.isError = true
     scrollToBottom()
   } finally {
     loading.value = false
@@ -69,11 +112,17 @@ async function send() {
     <h1>AI Chat</h1>
 
     <div class="messages" ref="messagesEl">
-      <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
+      <div
+        v-for="(m, i) in messages"
+        :key="i"
+        :class="['msg', m.role, { error: m.isError }]"
+      >
         <strong>{{ m.role === 'user' ? '我' : 'AI' }}:</strong>
-        <span>{{ m.content }}</span>
+        <span>{{
+          m.content ||
+          (loading && i === messages.length - 1 ? 'AI 思考中...' : '')
+        }}</span>
       </div>
-      <div v-if="loading" class="msg assistant">AI 思考中...</div>
     </div>
 
     <div class="input-row">
@@ -107,6 +156,13 @@ async function send() {
 }
 .msg.assistant {
   color: #1f2937;
+}
+.msg.assistant.error {
+  color: #dc2626;
+}
+.msg span {
+  /* 保留 LLM 回复中的换行；中断说明也能单独成行 */
+  white-space: pre-wrap;
 }
 .input-row {
   display: flex;
