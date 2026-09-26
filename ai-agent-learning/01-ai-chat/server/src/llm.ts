@@ -31,3 +31,22 @@ export async function chat(messages: ChatMessage[]): Promise<string> {
   return response.choices[0].message.content || "";
   // 提示：返回值类型是 ChatCompletion，content 可能为 null，需要兜底成空字符串 ""
 }
+
+/**
+ * Day4：流式调用 LLM。
+ * stream: true 后，返回值从“一次性给全部”变成异步可迭代对象（AsyncIterable），
+ * 每次迭代拿到一个 chunk，新产生的文字在 choices[0].delta.content 里。
+ */
+export async function* chatStream(
+  messages: ChatMessage[],
+): AsyncGenerator<string> {
+  const stream = await client.chat.completions.create({
+    model: process.env.MODEL_CHAT || "deepseek-chat",
+    messages,
+    stream: true,
+  });
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) yield delta;
+  }
+}
