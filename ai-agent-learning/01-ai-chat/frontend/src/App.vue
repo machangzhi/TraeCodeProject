@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import MarkdownView from './components/MarkdownView.vue'
 
 interface Message {
@@ -10,8 +10,65 @@ interface Message {
   isError?: boolean
 }
 
-// 消息列表，初始为空
-const messages = ref<Message[]>([])
+// Day6：Conversation 数据模型 —— 一个会话是一串有序消息
+interface Conversation {
+  id: string
+  title: string
+  messages: Message[]
+  createdAt: number
+}
+
+const STORAGE_KEY = 'ai-chat:conversations'
+
+// 从 localStorage 恢复上次的会话列表和当前会话 id
+function loadConversations(): Conversation[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Conversation[]) : []
+  } catch {
+    return []
+  }
+}
+
+const conversations = ref<Conversation[]>(loadConversations())
+const currentId = ref<string>(conversations.value[0]?.id ?? '')
+
+// 当前会话；模板里的 messages 都从它取
+const current = computed(
+  () => conversations.value.find((c) => c.id === currentId.value) ?? null,
+)
+const messages = computed(() => current.value?.messages ?? [])
+
+// 首次打开或全部删完时，兜底建一个空会话
+if (!current.value) {
+  const c: Conversation = {
+    id: crypto.randomUUID(),
+    title: '新会话',
+    messages: [],
+    createdAt: Date.now(),
+  }
+  conversations.value.push(c)
+  currentId.value = c.id
+}
+
+// 任何消息变化都持久化到 localStorage（刷新不丢）
+watch(
+  conversations,
+  (list) => localStorage.setItem(STORAGE_KEY, JSON.stringify(list)),
+  { deep: true },
+)
+
+// 新建会话并切换过去
+function newConversation() {
+  const c: Conversation = {
+    id: crypto.randomUUID(),
+    title: '新会话',
+    messages: [],
+    createdAt: Date.now(),
+  }
+  conversations.value.unshift(c)
+  currentId.value = c.id
+}
 
 // 输入框内容
 const input = ref('')
@@ -40,16 +97,26 @@ function stop() {
 
 async function send() {
   const text = input.value.trim()
-  if (!text || loading.value) return
+  const conv = current.value
+  if (!text || loading.value || !conv) return
+
+  // 捕获当前会话的引用：流式过程中用户可能切换会话，
+  // 后续所有写入都必须落在发起时的这个会话上，不能用 current.value
+  const convMessages = conv.messages
+
+  // 首条用户消息作为会话标题（取前 20 字）
+  if (convMessages.length === 0) {
+    conv.title = text.slice(0, 20)
+  }
 
   // 先把用户消息入列，再占位一条空的 AI 消息，流式过程中往里追加文字
-  messages.value.push({ role: 'user', content: text })
+  convMessages.push({ role: 'user', content: text })
   scrollToBottom()
   input.value = ''
   loading.value = true
 
-  messages.value.push({ role: 'assistant', content: '' })
-  const aiIndex = messages.value.length - 1
+  convMessages.push({ role: 'assistant', content: '' })
+  const aiIndex = convMessages.length - 1
 
   // 每条请求独立一个 AbortController，结束后在 finally 里清空
   const ctrl = new AbortController()
@@ -63,7 +130,7 @@ async function send() {
       signal: ctrl.signal,
       // 只发本轮占位之前的历史，并剔除历次失败/中断消息，避免污染上下文
       body: JSON.stringify({
-        messages: messages.value
+        messages: convMessages
           .filter((_, i) => i < aiIndex)
           .filter((m) => !m.isError),
       }),
@@ -94,7 +161,7 @@ async function send() {
         const data = JSON.parse(payload)
         if (data.error) throw new Error(data.error)
         if (data.delta) {
-          messages.value[aiIndex].content += data.delta
+          convMessages[aiIndex].content += data.delta
           scrollToBottom()
         }
       }
@@ -102,12 +169,12 @@ async function send() {
 
     // 整流没有任何 delta（如内容被审核拦截、finish_reason=content_filter），
     // 给占位气泡兜底提示并标记错误，避免空白气泡残留，也防止空消息进入下一轮历史
-    if (!messages.value[aiIndex].content) {
-      messages.value[aiIndex].content = '（模型未返回内容）'
-      messages.value[aiIndex].isError = true
+    if (!convMessages[aiIndex].content) {
+      convMessages[aiIndex].content = '（模型未返回内容）'
+      convMessages[aiIndex].isError = true
     }
   } catch (error) {
-    const ai = messages.value[aiIndex]
+    const ai = convMessages[aiIndex]
     if (error instanceof DOMException && error.name === 'AbortError') {
       // 用户主动 Stop：保留半截内容并标注，打 isError 不进下一轮历史
       ai.content = ai.content
@@ -131,45 +198,98 @@ async function send() {
 </script>
 
 <template>
-  <div class="chat">
-    <h1>AI Chat</h1>
-
-    <div class="messages" ref="messagesEl">
+  <div class="layout">
+    <aside class="sidebar">
+      <button class="new-btn" @click="newConversation">+ 新建会话</button>
       <div
-        v-for="(m, i) in messages"
-        :key="i"
-        :class="['msg-row', m.role]"
+        v-for="c in conversations"
+        :key="c.id"
+        :class="['conv-item', { active: c.id === currentId }]"
+        @click="currentId = c.id"
       >
-        <div :class="['bubble', m.role, { error: m.isError }]">
-          <div class="sender">{{ m.role === 'user' ? '我' : 'AI' }}</div>
-          <!-- 用户消息是纯输入，直接纯文本展示；AI 消息走 Markdown 渲染 -->
-          <span v-if="m.role === 'user'">{{ m.content }}</span>
-          <template v-else>
-            <MarkdownView v-if="m.content" :content="m.content" />
-            <!-- 流式还没吐出第一个 delta 时的等待动画 -->
-            <span
-              v-else-if="loading && i === messages.length - 1"
-              class="dots"
-              ><i></i><i></i><i></i
-            ></span>
-          </template>
+        {{ c.title }}
+      </div>
+    </aside>
+
+    <div class="chat">
+      <h1>AI Chat</h1>
+
+      <div class="messages" ref="messagesEl">
+        <div
+          v-for="(m, i) in messages"
+          :key="i"
+          :class="['msg-row', m.role]"
+        >
+          <div :class="['bubble', m.role, { error: m.isError }]">
+            <div class="sender">{{ m.role === 'user' ? '我' : 'AI' }}</div>
+            <!-- 用户消息是纯输入，直接纯文本展示；AI 消息走 Markdown 渲染 -->
+            <span v-if="m.role === 'user'">{{ m.content }}</span>
+            <template v-else>
+              <MarkdownView v-if="m.content" :content="m.content" />
+              <!-- 流式还没吐出第一个 delta 时的等待动画 -->
+              <span
+                v-else-if="loading && i === messages.length - 1"
+                class="dots"
+                ><i></i><i></i><i></i
+              ></span>
+            </template>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="input-row">
-      <input v-model="input" @keyup.enter="send" placeholder="输入消息，回车发送" />
-      <button v-if="loading" class="stop" @click="stop">停止</button>
-      <button v-else :disabled="!input.trim()" @click="send">发送</button>
+      <div class="input-row">
+        <input v-model="input" @keyup.enter="send" placeholder="输入消息，回车发送" />
+        <button v-if="loading" class="stop" @click="stop">停止</button>
+        <button v-else :disabled="!input.trim()" @click="send">发送</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.chat {
-  max-width: 720px;
+.layout {
+  display: flex;
+  max-width: 960px;
   margin: 40px auto;
   padding: 0 16px;
+  gap: 16px;
+}
+/* 会话列表侧边栏 */
+.sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.new-btn {
+  padding: 8px;
+  border: 1px dashed #2563eb;
+  background: #fff;
+  color: #2563eb;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.conv-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  /* 标题过长时单行省略 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-item:hover {
+  background: #f3f4f6;
+}
+.conv-item.active {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.chat {
+  flex: 1;
+  min-width: 0;
 }
 .messages {
   border: 1px solid #ddd;

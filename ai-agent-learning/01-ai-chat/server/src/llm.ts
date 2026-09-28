@@ -14,22 +14,58 @@ export interface ChatMessage {
   content: string;
 }
 
+// Day6：Token 限制。模型无状态，每轮都要把完整历史发给 API，
+// 历史越长 prompt token 越多 —— 既烧费用又会撞 context window 上限。
+// 这里在调用前按预算从最新往回保留消息，丢头的旧消息。
+// 估算规则（不用精确 tokenizer，偏保守即可）：中文≈1 token/字，英文≈0.3 token/字符，
+// 统一按 0.7 × 字符数 + 4（role 等元数据开销）估算。
+const MAX_HISTORY_TOKENS = Number(process.env.MAX_HISTORY_TOKENS) || 8000;
+
+function estimateTokens(msg: ChatMessage): number {
+  return Math.ceil(msg.content.length * 0.7) + 4;
+}
+
+/**
+ * 按 token 预算截断历史：system 消息永远保留，其余从最新往回装，
+ * 装不下就丢更早的。最后一条用户消息（本轮提问）即使超预算也必须保留。
+ */
+export function trimHistory(
+  messages: ChatMessage[],
+  maxTokens: number = MAX_HISTORY_TOKENS,
+): ChatMessage[] {
+  const system = messages.filter((m) => m.role === "system");
+  const rest = messages.filter((m) => m.role !== "system");
+
+  let budget = maxTokens - system.reduce((s, m) => s + estimateTokens(m), 0);
+  const kept: ChatMessage[] = [];
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const t = estimateTokens(rest[i]);
+    if (t > budget && kept.length > 0) break;
+    budget -= t;
+    kept.unshift(rest[i]);
+  }
+  const dropped = rest.length - kept.length;
+  if (dropped > 0) {
+    console.log(`[trimHistory] 超出 token 预算，丢弃最早 ${dropped} 条消息`);
+  }
+  return [...system, ...kept];
+}
+
 /**
  * 调用 LLM 并返回模型回复的文本。
  * @param messages 完整的对话历史数组（含 system / user / assistant）
  * @returns 模型回复内容字符串
  */
 export async function chat(messages: ChatMessage[]): Promise<string> {
-  // TODO(Day2·你来写)：
-  // 1. 调用 client.chat.completions.create(...)
-  //    传入 model: process.env.MODEL_CHAT（默认 "deepseek-chat"）和 messages
+  const trimmed = trimHistory(messages);
+  console.log(
+    `[llm] chat 请求：${messages.length} 条消息 → 截断后 ${trimmed.length} 条，估算 prompt ${trimmed.reduce((s, m) => s + estimateTokens(m), 0)} tokens`,
+  );
   const response = await client.chat.completions.create({
     model: process.env.MODEL_CHAT || "deepseek-chat",
-    messages,
+    messages: trimmed,
   });
-  // 2. 从返回值中取出 choices[0].message.content 返回
   return response.choices[0].message.content || "";
-  // 提示：返回值类型是 ChatCompletion，content 可能为 null，需要兜底成空字符串 ""
 }
 
 /**
@@ -40,9 +76,13 @@ export async function chat(messages: ChatMessage[]): Promise<string> {
 export async function* chatStream(
   messages: ChatMessage[],
 ): AsyncGenerator<string> {
+  const trimmed = trimHistory(messages);
+  console.log(
+    `[llm] stream 请求：${messages.length} 条消息 → 截断后 ${trimmed.length} 条，估算 prompt ${trimmed.reduce((s, m) => s + estimateTokens(m), 0)} tokens`,
+  );
   const stream = await client.chat.completions.create({
     model: process.env.MODEL_CHAT || "deepseek-chat",
-    messages,
+    messages: trimmed,
     stream: true,
   });
   for await (const chunk of stream) {
