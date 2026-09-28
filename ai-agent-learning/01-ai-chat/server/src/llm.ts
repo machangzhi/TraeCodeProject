@@ -17,12 +17,17 @@ export interface ChatMessage {
 // Day6：Token 限制。模型无状态，每轮都要把完整历史发给 API，
 // 历史越长 prompt token 越多 —— 既烧费用又会撞 context window 上限。
 // 这里在调用前按预算从最新往回保留消息，丢头的旧消息。
-// 估算规则（不用精确 tokenizer，偏保守即可）：中文≈1 token/字，英文≈0.3 token/字符，
-// 统一按 0.7 × 字符数 + 4（role 等元数据开销）估算。
+// 估算规则（不用精确 tokenizer，偏保守即可）：中文按 1 token/字，
+// ASCII（英文/数字/符号）按 0.3 token/字符，再 +4 覆盖 role 等元数据开销。
 const MAX_HISTORY_TOKENS = Number(process.env.MAX_HISTORY_TOKENS) || 8000;
 
 function estimateTokens(msg: ChatMessage): number {
-  return Math.ceil(msg.content.length * 0.7) + 4;
+  let units = 0;
+  for (const ch of msg.content) {
+    // 非 ASCII（中文、全角标点等）按 1 token 计，ASCII 按 0.3 计
+    units += ch.charCodeAt(0) > 127 ? 1 : 0.3;
+  }
+  return Math.ceil(units) + 4;
 }
 
 /**

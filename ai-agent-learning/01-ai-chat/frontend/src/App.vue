@@ -19,8 +19,9 @@ interface Conversation {
 }
 
 const STORAGE_KEY = 'ai-chat:conversations'
+const CURRENT_KEY = 'ai-chat:currentId'
 
-// 从 localStorage 恢复上次的会话列表和当前会话 id
+// 从 localStorage 恢复上次的会话列表
 function loadConversations(): Conversation[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -31,7 +32,14 @@ function loadConversations(): Conversation[] {
 }
 
 const conversations = ref<Conversation[]>(loadConversations())
-const currentId = ref<string>(conversations.value[0]?.id ?? '')
+
+// 恢复上次激活的会话；存的 id 已不在列表里（比如换了浏览器数据被清过）就回退到第一个
+const storedId = localStorage.getItem(CURRENT_KEY)
+const currentId = ref<string>(
+  storedId && conversations.value.some((c) => c.id === storedId)
+    ? storedId
+    : (conversations.value[0]?.id ?? ''),
+)
 
 // 当前会话；模板里的 messages 都从它取
 const current = computed(
@@ -51,12 +59,23 @@ if (!current.value) {
   currentId.value = c.id
 }
 
-// 任何消息变化都持久化到 localStorage（刷新不丢）
+// 消息变化持久化到 localStorage（刷新不丢）。
+// 流式期间每个 delta 都会触发 deep watch，如果同步 stringify 全量列表
+// 会造成 O(token数 × 总数据量) 的卡顿，所以用 300ms 防抖合并写入。
+let saveTimer: ReturnType<typeof setTimeout> | undefined
 watch(
   conversations,
-  (list) => localStorage.setItem(STORAGE_KEY, JSON.stringify(list)),
+  (list) => {
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+    }, 300)
+  },
   { deep: true },
 )
+
+// 切换会话时立即记录当前 id，刷新后能回到同一会话
+watch(currentId, (id) => localStorage.setItem(CURRENT_KEY, id))
 
 // 新建会话并切换过去
 function newConversation() {
