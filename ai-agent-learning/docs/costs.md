@@ -22,3 +22,4 @@
 | 2026-09-28 | Day 8 Prompt 策略对比实验（5 组） | deepseek-chat | ≈0.005 | 共 2776 tokens（prompt 206 + completion 2570）；结论：强 Instruction 策略 token 消耗最低且可控性最好 |
 | 2026-09-29 | Day 9 Few Shot 情感分类实验（10 条 × 3 策略 + 首次挂起重跑） | deepseek-chat | ≈0.005 | 成功批次 3599 tokens；示例使 prompt 成本达 zero-shot 的 1.6~2.2 倍；结论：few-shot 修正了 zero-shot 的中性误判，3 条示例即达 10/10 |
 | 2026-09-29 | Day 10 Structured Output 意图识别实验（8 条 × 3 策略 + 1 次修复） | deepseek-chat | ≈0.005 | 17 次调用，3309 tokens；结论：json_object 不防 max_tokens 截断（finish_reason=length），Zod 校验 + 错误回喂修复 1 次即救回 |
+| 2026-10-03 | Day 11 需求分析器实验（8 条 × 2 策略，0 修复） | deepseek-chat | ≈0.005 | 16 次调用，6044 tokens（prompt 3792 / completion 2252）；结论：基础 prompt 会脑补（把"吃什么"做成推荐系统），反幻觉 prompt 靠"待澄清"机制守住忠实度，代价是 prompt token 约 1.9 倍、偶发过度提问 |
