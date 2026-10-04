@@ -24,3 +24,4 @@
 | 2026-09-29 | Day 10 Structured Output 意图识别实验（8 条 × 3 策略 + 1 次修复） | deepseek-chat | ≈0.005 | 17 次调用，3309 tokens；结论：json_object 不防 max_tokens 截断（finish_reason=length），Zod 校验 + 错误回喂修复 1 次即救回 |
 | 2026-10-03 | Day 11 需求分析器实验（8 条 × 2 策略，0 修复） | deepseek-chat | ≈0.005 | 16 次调用，6044 tokens（prompt 3792 / completion 2252）；结论：基础 prompt 会脑补（把"吃什么"做成推荐系统），反幻觉 prompt 靠"待澄清"机制守住忠实度，代价是 prompt token 约 1.9 倍、偶发过度提问 |
 | 2026-10-03 | Day 12 错误处理实验（11 个 mock 场景 + 4 个真实场景共 7 次调用） | deepseek-chat | ≈0.002 | mock 场景零成本；真实场景中 R1 超时×2 / R2 报错×1 无 token，R3 截断恢复×3 + R4 基线×1，估算 ≈1400 tokens；结论：显式超时使挂死场景 321ms 快速失败（vs 最坏陪等约 2400s），401/400 立即失败不重试，真实截断需 max_tokens 8→32→128 两轮自适应才恢复 |
+| 2026-10-04 | Day 13 Prompt 优化实验（工单分诊 V1/V2/V3，共 30 次调用） | deepseek-chat | ≈0.02 | 共 12595 tokens（input 10655 / output 1940）；三版类别 0/10→10/10、优先级 0/10→9/10→10/10；关键结论：问题须跑出而非想出，边界示例（闪退≥P1 vs 显示延迟=P2）比堆砌规则有效，规则越清晰 completion 越短（1017→369） |
