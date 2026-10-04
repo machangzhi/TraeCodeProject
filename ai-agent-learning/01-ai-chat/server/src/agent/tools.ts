@@ -7,7 +7,7 @@
  */
 import { z } from "zod";
 import type OpenAI from "openai";
-import type { ToolHandler } from "./registry";
+import type { ToolHandler } from "./registry.ts";
 
 export class ToolExecError extends Error {}
 
