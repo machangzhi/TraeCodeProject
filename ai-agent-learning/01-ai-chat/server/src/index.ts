@@ -1,6 +1,7 @@
 import "./env" ;
 import express from "express";
 import { chat, chatStream, type ChatMessage } from "./llm";
+import { runAgentStream } from "./agent/agent";
 
 
 const app = express();
@@ -69,6 +70,55 @@ app.post("/api/chat/stream", async (req, res) => {
     if (!closed) {
       res.write(`data: ${JSON.stringify({ error: "LLM 调用失败" })}\n\n`);
     }
+  } finally {
+    res.end();
+  }
+});
+
+// Day 27：Agent 思考链流式接口（SSE）
+// 请求体 { messages }：最后一条 user 消息作为本轮任务，其余作为历史（Memory = full 策略）。
+// 事件流 data: {"type":"thinking"|"tool_call"|"tool_result"|"answer"|"done"|"error", ...}，[DONE] 结束。
+app.post("/api/agent/stream", async (req, res) => {
+  const messages = req.body?.messages as ChatMessage[] | undefined;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "messages必须是非空数组" });
+    return;
+  }
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUser) {
+    res.status(400).json({ error: "messages中必须包含至少一条user消息" });
+    return;
+  }
+  // 最后一条 user 之前的消息作为历史（剔除 system 与之后可能重复的内容）
+  const idx = messages.lastIndexOf(lastUser);
+  const history = messages.slice(0, idx).filter((m) => m.role === "user" || m.role === "assistant");
+
+  // 断连检测：必须监听 res 而非 req（Node16+ POST body 读完后 req 立即 close）
+  let closed = false;
+  res.on("close", () => {
+    if (!res.writableFinished) closed = true;
+  });
+
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  const send = (payload: unknown) => {
+    if (!closed) res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    await runAgentStream({
+      input: lastUser.content,
+      history,
+      onEvent: send,
+    });
+    if (!closed) res.write("data: [DONE]\n\n");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[agent/stream] 运行失败:", message);
+    if (!closed) send({ type: "error", message: "Agent 运行失败" });
   } finally {
     res.end();
   }

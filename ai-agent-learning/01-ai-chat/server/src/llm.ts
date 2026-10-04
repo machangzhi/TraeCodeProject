@@ -95,3 +95,33 @@ export async function* chatStream(
     if (delta) yield delta;
   }
 }
+
+/**
+ * Day 27：带工具定义的完整补全调用（Agent 循环专用）。
+ * 返回原始 message（可能含 tool_calls）与 usage；30s 超时、内部不重试
+ * （重试统一在 Agent 循环层做，便于计账——Day 25 结论）。
+ */
+export async function chatComplete(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  options: { tools?: OpenAI.Chat.Completions.ChatCompletionTool[] } = {},
+): Promise<{
+  message: OpenAI.Chat.ChatCompletionMessage;
+  usage: { prompt_tokens: number; completion_tokens: number };
+}> {
+  const resp = await client.chat.completions.create(
+    {
+      model: process.env.MODEL_CHAT || "deepseek-chat",
+      messages,
+      temperature: 0,
+      ...(options.tools ? { tools: options.tools } : {}),
+    },
+    { timeout: 30_000, maxRetries: 0 },
+  );
+  return {
+    message: resp.choices[0].message,
+    usage: {
+      prompt_tokens: resp.usage?.prompt_tokens ?? 0,
+      completion_tokens: resp.usage?.completion_tokens ?? 0,
+    },
+  };
+}

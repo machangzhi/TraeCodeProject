@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import MarkdownView from './components/MarkdownView.vue'
+import AgentSteps, { type AgentStep } from './components/AgentSteps.vue'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -8,6 +9,8 @@ interface Message {
   // 标记请求失败/中断/空回复的消息：仅用于界面提示，组装请求历史时必须过滤掉，
   // 不能把“请求失败”这类客户端文案或半截残文当作模型回复发给 LLM
   isError?: boolean
+  // Day 27：Agent 思考链步骤（Agent 模式下由 SSE 事件逐条填充）
+  steps?: AgentStep[]
 }
 
 // Day6：Conversation 数据模型 —— 一个会话是一串有序消息
@@ -95,6 +98,10 @@ const input = ref('')
 // 发送中状态：控制 Stop 按钮显示、防止重复发送
 const loading = ref(false)
 
+// Day 27：Agent 模式开关——开启后走 /api/agent/stream，
+// 气泡内会实时显示 思考 → 调用工具 → 工具返回 的完整思考链
+const agentMode = ref(true)
+
 // 当前请求的取消控制器；null 表示没有在途请求
 const abortCtrl = ref<AbortController | null>(null)
 
@@ -134,16 +141,23 @@ async function send() {
   input.value = ''
   loading.value = true
 
-  convMessages.push({ role: 'assistant', content: '' })
+  // Agent 模式下预置 steps 数组，SSE 事件逐条填入形成思考链时间线
+  convMessages.push({
+    role: 'assistant',
+    content: '',
+    ...(agentMode.value ? { steps: [] as AgentStep[] } : {}),
+  })
   const aiIndex = convMessages.length - 1
+  const ai = convMessages[aiIndex]
 
   // 每条请求独立一个 AbortController，结束后在 finally 里清空
   const ctrl = new AbortController()
   abortCtrl.value = ctrl
 
   try {
-    // EventSource 只支持 GET、发不了 POST body，所以用 fetch 手动读流
-    const res = await fetch('/api/chat/stream', {
+    // EventSource 只支持 GET、发不了 POST body，所以用 fetch 手动读流。
+    // Agent 模式走 /api/agent/stream，事件为 {type: thinking|tool_call|tool_result|answer|...}
+    const res = await fetch(agentMode.value ? '/api/agent/stream' : '/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: ctrl.signal,
@@ -178,22 +192,41 @@ async function send() {
         const payload = line.slice(5).trim()
         if (payload === '[DONE]') break
         const data = JSON.parse(payload)
-        if (data.error) throw new Error(data.error)
-        if (data.delta) {
-          convMessages[aiIndex].content += data.delta
-          scrollToBottom()
+
+        if (agentMode.value) {
+          // Agent 事件流：把过程事件逐条填进 steps，最终 answer 写入正文
+          if (data.type === 'error') throw new Error(data.message || 'Agent 运行失败')
+          else if (data.type === 'thinking')
+            ai.steps!.push({ type: 'thinking', text: data.content, at: Date.now() })
+          else if (data.type === 'tool_call')
+            ai.steps!.push({ type: 'tool_call', name: data.name, args: data.args, at: Date.now() })
+          else if (data.type === 'tool_result')
+            ai.steps!.push({
+              type: 'tool_result', name: data.name, ok: data.ok,
+              output: JSON.stringify(data.output), elapsedMs: data.elapsedMs, at: Date.now(),
+            })
+          else if (data.type === 'answer') {
+            ai.content = data.content || ''
+            scrollToBottom()
+          }
+          // done：统计事件，答复已写入，无需处理
+        } else {
+          if (data.error) throw new Error(data.error)
+          if (data.delta) {
+            ai.content += data.delta
+            scrollToBottom()
+          }
         }
       }
     }
 
-    // 整流没有任何 delta（如内容被审核拦截、finish_reason=content_filter），
+    // 整流没有任何内容（如内容被审核拦截、finish_reason=content_filter），
     // 给占位气泡兜底提示并标记错误，避免空白气泡残留，也防止空消息进入下一轮历史
-    if (!convMessages[aiIndex].content) {
-      convMessages[aiIndex].content = '（模型未返回内容）'
-      convMessages[aiIndex].isError = true
+    if (!ai.content) {
+      ai.content = '（模型未返回内容）'
+      ai.isError = true
     }
   } catch (error) {
-    const ai = convMessages[aiIndex]
     if (error instanceof DOMException && error.name === 'AbortError') {
       // 用户主动 Stop：保留半截内容并标注，打 isError 不进下一轮历史
       ai.content = ai.content
@@ -244,10 +277,16 @@ async function send() {
             <!-- 用户消息是纯输入，直接纯文本展示；AI 消息走 Markdown 渲染 -->
             <span v-if="m.role === 'user'">{{ m.content }}</span>
             <template v-else>
+              <!-- Day 27：Agent 思考链时间线（Agent 模式消息才有 steps） -->
+              <AgentSteps
+                v-if="m.steps"
+                :steps="m.steps"
+                :running="loading && i === messages.length - 1 && !m.content"
+              />
               <MarkdownView v-if="m.content" :content="m.content" />
-              <!-- 流式还没吐出第一个 delta 时的等待动画 -->
+              <!-- 纯聊天模式流式等待动画；Agent 模式的进行中状态由时间线内 running 行负责 -->
               <span
-                v-else-if="loading && i === messages.length - 1"
+                v-else-if="loading && i === messages.length - 1 && !m.steps"
                 class="dots"
                 ><i></i><i></i><i></i
               ></span>
@@ -257,6 +296,9 @@ async function send() {
       </div>
 
       <div class="input-row">
+        <label class="agent-toggle" title="开启后 AI 可调用工具，并实时显示思考链">
+          <input type="checkbox" v-model="agentMode" /> Agent
+        </label>
         <input v-model="input" @keyup.enter="send" placeholder="输入消息，回车发送" />
         <button v-if="loading" class="stop" @click="stop">停止</button>
         <button v-else :disabled="!input.trim()" @click="send">发送</button>
@@ -384,6 +426,17 @@ async function send() {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+  align-items: center;
+}
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #1d4ed8;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
 }
 .input-row input {
   flex: 1;
