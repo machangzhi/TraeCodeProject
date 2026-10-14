@@ -126,7 +126,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 // ---------------- Markdown 解析 + 结构化切分 ----------------
 
-function parseMarkdown(md: string): string {
+export function parseMarkdown(md: string): string {
   const codeBlocks: string[] = [];
   let text = md.replace(/```[\s\S]*?```/g, (match) => {
     codeBlocks.push(match.replace(/^```\w*\n?/, "").replace(/\n?```$/, ""));
@@ -137,7 +137,7 @@ function parseMarkdown(md: string): string {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function chunkByHeadings(md: string, maxChunkSize: number = 800) {
+export function chunkByHeadings(md: string, maxChunkSize: number = 800) {
   const lines = md.split("\n");
   const sections: { heading: string; content: string; level: number }[] = [];
   let currentHeading = "";
@@ -220,7 +220,7 @@ export function listDocuments(): DocumentInfo[] {
 }
 
 /** 文件名消毒：只保留中英文、数字、点、下划线、连字符，防止路径穿越写出 docs 目录 */
-function sanitizeFilename(name: string): string {
+export function sanitizeFilename(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "";
   const safe = base.replace(/[^\w.\-\u4e00-\u9fa5]/g, "_").replace(/^\.+/, "");
   return safe || `upload-${Date.now()}.md`;

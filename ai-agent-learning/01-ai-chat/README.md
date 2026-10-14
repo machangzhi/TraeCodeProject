@@ -1,6 +1,6 @@
-# 01-ai-chat：第一阶段 AI Chat + Tool Calling + 手写 Agent
+# 01-ai-chat：AI Chat + Tool Calling + 手写 Agent + RAG 知识库
 
-从零实现的 AI 聊天 + Agent 应用，覆盖第一阶段（Day 1–Day 27）全部内容，Day 28 验收通过。
+从零实现的 AI 聊天 + Agent + RAG 知识库应用，覆盖 Day 1–42 全部内容（第一阶段 Day 28 验收通过，企业知识库 V1 Day 42 验收 17/17 通过）。
 
 ## 功能
 
@@ -32,6 +32,16 @@
 - 历史消息透传（Memory = full 策略）+ token 预算截断
 - 事件化 SSE：`thinking → tool_call → tool_result → answer → done` 思考链
 - 前端 AgentSteps.vue 时间线组件实时展示思考过程
+
+### RAG 企业知识库（Day 29–42）
+- 本地 Embedding：`Xenova/all-MiniLM-L6-v2`（384 维）+ 文本哈希缓存（同文本零重复计费）
+- 自研 `LocalVectorStore`：JSON 持久化 + Cosine Top K，模拟 Chroma 接口（无 Docker 环境下的选型）
+- 文档入库：Markdown 按 H1/H2/H3 结构化切分，超长 section 二次切分，chunk 携带 `heading`/`level`
+- 统一解析接口：Markdown / PDF / Word（`parseDocument`）
+- Metadata 过滤：`category`（粗分类）+ `tags`（细标签），**先过滤再排序**
+- RAG 问答：Query → Embedding → 过滤检索 Top K → Context → LLM → Answer + Sources，带拒答约束
+- 知识库界面：文档列表 / 上传文档 / 重建索引 / 问答 / 「来源：文件 · 标题 · 距离」引用展示
+- Agent 与 RAG 两种模式互斥切换，RAG 模式支持 Vue / React 分类过滤
 
 ## 技术栈
 
@@ -67,14 +77,16 @@ npm run dev
 ├── server/src/
 │   ├── env.ts              # dotenv 优先加载（ESM 顺序坑）
 │   ├── llm.ts              # OpenAI SDK 封装 + token 估算 + 历史截断 + chatComplete
-│   ├── index.ts            # Express 路由：/api/chat、/api/chat/stream、/api/agent/stream
+│   ├── index.ts            # Express 路由：/api/chat、/api/chat/stream、/api/agent/stream、/api/rag*
 │   ├── agent/
 │   │   ├── tools.ts        # calculator / get_current_time / get_weather 实现
 │   │   ├── registry.ts     # ToolRegistry 四阶段执行流水线
 │   │   └── agent.ts        # runAgentStream 事件化 Agent 循环
-│   └── experiments/        # Day 8–28 各天实验脚本
+│   ├── rag/
+│   │   └── rag.ts          # RAG 链路：解析 / 结构化切分 / LocalVectorStore / 过滤检索 / LLM 生成
+│   └── experiments/        # Day 8–42 各天实验脚本
 └── frontend/src/
-    ├── App.vue                 # 会话管理 + 流式收发 + Agent 模式开关
+    ├── App.vue                 # 会话管理 + 流式收发 + Agent 模式开关 + RAG 知识库面板
     └── components/
         ├── MarkdownView.vue    # Markdown 渲染 + 代码高亮
         └── AgentSteps.vue      # Agent 思考链时间线
@@ -87,6 +99,10 @@ npm run dev
 | POST | /api/chat | 非流式对话，返回 `{ reply }` |
 | POST | /api/chat/stream | SSE 流式对话，`data: { delta }`，`[DONE]` 结束 |
 | POST | /api/agent/stream | Agent 模式 SSE，事件：thinking / tool_call / tool_result / answer / done |
+| POST | /api/rag | 知识库问答，返回 `{ answer, sources: [{ file, heading, distance }] }` |
+| POST | /api/rag/ingest | 重建索引，返回 `{ count, files }` |
+| GET | /api/rag/documents | 知识库列表，返回 `{ documents: [{ file, category, chunkCount, headings }] }` |
+| POST | /api/rag/documents | 上传文档（`{ filename, content }`），写入 `data/docs` 后重建索引 |
 
 ## 五个核心问题
 
