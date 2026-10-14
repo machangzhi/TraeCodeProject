@@ -2,10 +2,12 @@ import "./env" ;
 import express from "express";
 import { chat, chatStream, type ChatMessage } from "./llm";
 import { runAgentStream } from "./agent/agent";
+import { addDocument, ingestDocuments, listDocuments, ragQuery } from "./rag/rag";
 
 
 const app = express();
-app.use(express.json());
+// Day 39：上传文档走 JSON 提交，默认 100kb 放不下较大的 Markdown，调到 2mb
+app.use(express.json({ limit: "2mb" }));
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -121,6 +123,76 @@ app.post("/api/agent/stream", async (req, res) => {
     if (!closed) send({ type: "error", message: "Agent 运行失败" });
   } finally {
     res.end();
+  }
+});
+
+// Day 39：RAG 知识库问答接口
+// POST /api/rag  body: { question, topK?, category? }
+// 返回 { answer, sources: [{ file, heading, distance }] }
+app.post("/api/rag", async (req, res) => {
+  try {
+    const { question, topK, category } = req.body ?? {};
+    if (typeof question !== "string" || !question.trim()) {
+      res.status(400).json({ error: "question 不能为空" });
+      return;
+    }
+    const result = await ragQuery(question, {
+      topK: topK ?? 3,
+      filter: category ? { category } : undefined,
+    });
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[rag] 失败:", message);
+    res.status(500).json({ error: "RAG 查询失败" });
+  }
+});
+
+// Day 39：重新入库文档
+// POST /api/rag/ingest  返回 { count, files }
+app.post("/api/rag/ingest", async (_req, res) => {
+  try {
+    const result = await ingestDocuments();
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[rag/ingest] 失败:", message);
+    res.status(500).json({ error: "入库失败" });
+  }
+});
+
+// Day 39：知识库列表
+// GET /api/rag/documents  返回 { documents: [{ file, category, chunkCount, headings }] }
+app.get("/api/rag/documents", (_req, res) => {
+  try {
+    res.json({ documents: listDocuments() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[rag/documents] 失败:", message);
+    res.status(500).json({ error: "读取知识库失败" });
+  }
+});
+
+// Day 39：上传文档
+// POST /api/rag/documents  body: { filename, content }（前端用 FileReader 读成文本后 JSON 提交）
+// 返回 { file, count }；写入 data/docs 后全量重新入库
+app.post("/api/rag/documents", async (req, res) => {
+  try {
+    const { filename, content } = req.body ?? {};
+    if (typeof filename !== "string" || !filename.trim()) {
+      res.status(400).json({ error: "filename 不能为空" });
+      return;
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      res.status(400).json({ error: "content 不能为空" });
+      return;
+    }
+    const result = await addDocument(filename, content);
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[rag/documents] 上传失败:", message);
+    res.status(500).json({ error: "上传失败" });
   }
 });
 

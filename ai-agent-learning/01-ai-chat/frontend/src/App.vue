@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import MarkdownView from './components/MarkdownView.vue'
 import AgentSteps, { type AgentStep } from './components/AgentSteps.vue'
 
@@ -7,10 +7,12 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   // 标记请求失败/中断/空回复的消息：仅用于界面提示，组装请求历史时必须过滤掉，
-  // 不能把“请求失败”这类客户端文案或半截残文当作模型回复发给 LLM
+  // 不能把"请求失败"这类客户端文案或半截残文当作模型回复发给 LLM
   isError?: boolean
   // Day 27：Agent 思考链步骤（Agent 模式下由 SSE 事件逐条填充）
   steps?: AgentStep[]
+  // Day 39：RAG 模式下的来源文档
+  sources?: { file: string; heading: string; distance: number }[]
 }
 
 // Day6：Conversation 数据模型 —— 一个会话是一串有序消息
@@ -102,6 +104,80 @@ const loading = ref(false)
 // 气泡内会实时显示 思考 → 调用工具 → 工具返回 的完整思考链
 const agentMode = ref(true)
 
+// Day 39：RAG 知识库问答模式——开启后走 /api/rag，回答带来源
+const ragMode = ref(false)
+// RAG 分类过滤（all / vue / react）
+const ragCategory = ref('all')
+
+// Day 39：知识库列表 + 上传
+interface DocInfo {
+  file: string
+  category: string
+  chunkCount: number
+  headings: string[]
+}
+const docs = ref<DocInfo[]>([])
+const uploading = ref(false)
+const uploadMsg = ref('')
+
+// 拉取知识库列表（打开页面时 + 每次上传/入库后刷新）
+async function loadDocs() {
+  try {
+    const res = await fetch('/api/rag/documents')
+    if (!res.ok) return
+    const data = await res.json()
+    docs.value = data.documents || []
+  } catch {
+    // 后端没起来时静默失败，不打断聊天
+  }
+}
+
+// 上传：前端读文本 → JSON 提交后端（后端写盘 + 重新入库）
+async function onUpload(e: Event) {
+  const inputEl = e.target as HTMLInputElement
+  const file = inputEl.files?.[0]
+  if (!file) return
+  uploading.value = true
+  uploadMsg.value = ''
+  try {
+    const content = await file.text()
+    const res = await fetch('/api/rag/documents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    uploadMsg.value = `已入库 ${data.file}（全库 ${data.count} chunks）`
+    await loadDocs()
+  } catch (err) {
+    uploadMsg.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    uploading.value = false
+    // 清空，允许重复上传同一文件
+    inputEl.value = ''
+  }
+}
+
+// 重新入库当前 data/docs 目录
+async function reIngest() {
+  uploading.value = true
+  uploadMsg.value = ''
+  try {
+    const res = await fetch('/api/rag/ingest', { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    uploadMsg.value = `已重建索引（${data.files.length} 个文件 / ${data.count} chunks）`
+    await loadDocs()
+  } catch (err) {
+    uploadMsg.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    uploading.value = false
+  }
+}
+
+onMounted(loadDocs)
+
 // 当前请求的取消控制器；null 表示没有在途请求
 const abortCtrl = ref<AbortController | null>(null)
 
@@ -155,6 +231,26 @@ async function send() {
   abortCtrl.value = ctrl
 
   try {
+    // Day 39：RAG 模式——走 /api/rag，非流式，返回 answer + sources
+    if (ragMode.value) {
+      const res = await fetch('/api/rag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          question: text,
+          topK: 3,
+          category: ragCategory.value === 'all' ? undefined : ragCategory.value,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      ai.content = data.answer || '（无回答）'
+      ai.sources = data.sources || []
+      scrollToBottom()
+      return
+    }
+
     // EventSource 只支持 GET、发不了 POST body，所以用 fetch 手动读流。
     // Agent 模式走 /api/agent/stream，事件为 {type: thinking|tool_call|tool_result|answer|...}
     const res = await fetch(agentMode.value ? '/api/agent/stream' : '/api/chat/stream', {
@@ -261,6 +357,23 @@ async function send() {
       >
         {{ c.title }}
       </div>
+
+      <!-- Day 39：知识库面板——列表 / 上传 / 重建索引 -->
+      <div class="kb">
+        <div class="kb-title">知识库</div>
+        <div v-for="d in docs" :key="d.file" class="kb-item" :title="d.headings.join(' / ')">
+          <span class="kb-file">{{ d.file }}</span>
+          <span class="kb-cat">{{ d.category }}</span>
+          <span class="kb-count">{{ d.chunkCount }}</span>
+        </div>
+        <div v-if="!docs.length" class="kb-empty">暂无文档</div>
+        <label class="kb-upload">
+          <input type="file" accept=".md,.markdown,.txt" :disabled="uploading" @change="onUpload" />
+          {{ uploading ? '处理中…' : '+ 上传文档' }}
+        </label>
+        <button class="kb-reingest" :disabled="uploading" @click="reIngest">重建索引</button>
+        <div v-if="uploadMsg" class="kb-msg">{{ uploadMsg }}</div>
+      </div>
     </aside>
 
     <div class="chat">
@@ -290,6 +403,15 @@ async function send() {
                 class="dots"
                 ><i></i><i></i><i></i
               ></span>
+              <!-- Day 39：RAG 来源展示 -->
+              <div v-if="m.sources && m.sources.length" class="sources">
+                <div class="sources-title">来源：</div>
+                <div v-for="(s, si) in m.sources" :key="si" class="source-item">
+                  <span class="source-file">{{ s.file }}</span>
+                  <span class="source-heading">{{ s.heading }}</span>
+                  <span class="source-dist">{{ s.distance.toFixed(3) }}</span>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -297,9 +419,17 @@ async function send() {
 
       <div class="input-row">
         <label class="agent-toggle" title="开启后 AI 可调用工具，并实时显示思考链">
-          <input type="checkbox" v-model="agentMode" /> Agent
+          <input type="checkbox" v-model="agentMode" :disabled="ragMode" /> Agent
         </label>
-        <input v-model="input" @keyup.enter="send" placeholder="输入消息，回车发送" />
+        <label class="agent-toggle" title="开启后基于知识库回答，并显示来源">
+          <input type="checkbox" v-model="ragMode" :disabled="agentMode" /> RAG
+        </label>
+        <select v-if="ragMode" v-model="ragCategory" class="rag-category">
+          <option value="all">全部</option>
+          <option value="vue">Vue</option>
+          <option value="react">React</option>
+        </select>
+        <input v-model="input" @keyup.enter="send" :placeholder="ragMode ? '问知识库问题，回车发送' : '输入消息，回车发送'" />
         <button v-if="loading" class="stop" @click="stop">停止</button>
         <button v-else :disabled="!input.trim()" @click="send">发送</button>
       </div>
@@ -347,6 +477,77 @@ async function send() {
 .conv-item.active {
   background: #dbeafe;
   color: #1d4ed8;
+}
+/* Day 39：知识库面板 */
+.kb {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+.kb-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.kb-file {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kb-cat {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 11px;
+}
+.kb-count {
+  font-family: ui-monospace, monospace;
+  color: #6b7280;
+}
+.kb-empty {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.kb-upload,
+.kb-reingest {
+  padding: 6px;
+  font-size: 12px;
+  text-align: center;
+  border: 1px dashed #2563eb;
+  background: #fff;
+  color: #2563eb;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.kb-reingest {
+  border-style: solid;
+  border-color: #d1d5db;
+  color: #4b5563;
+}
+.kb-upload input {
+  display: none;
+}
+.kb-upload:has(input:disabled),
+.kb-reingest:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.kb-msg {
+  font-size: 12px;
+  color: #059669;
+  word-break: break-all;
 }
 .chat {
   flex: 1;
@@ -438,6 +639,13 @@ async function send() {
   user-select: none;
   white-space: nowrap;
 }
+.rag-category {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+}
 .input-row input {
   flex: 1;
   padding: 10px;
@@ -458,5 +666,35 @@ async function send() {
 .input-row button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Day 39：RAG 来源展示 */
+.sources {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+.sources-title {
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+.source-item {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  color: #4b5563;
+}
+.source-file {
+  color: #2563eb;
+  font-weight: 500;
+}
+.source-heading {
+  color: #6b7280;
+}
+.source-dist {
+  margin-left: auto;
+  color: #9ca3af;
+  font-family: monospace;
 }
 </style>
