@@ -3,7 +3,7 @@
  *
  * 封装文档入库 + 检索 + LLM 生成的完整链路，供 API 和实验脚本复用。
  *
- * 流程：Query → Embedding → 过滤检索 Top N → (可选) 阈值过滤 → (可选) Rerank → Context → LLM → Answer + Sources
+ * 流程：Query →(可选) 改写→ Search Query → Embedding → 过滤检索 Top N → (可选) 阈值过滤 → (可选) Rerank → Context → LLM → Answer + Sources
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -268,12 +268,20 @@ export async function ragQuery(
     rerank?: RerankFn;
     /** Day 46：粗排召回条数（重排的输入规模），默认 20；无重排时等于 topK */
     rerankTopN?: number;
+    /**
+     * Day 47：改写后的检索式。提供时仅用于 Embedding / Rerank（即"检索"），
+     * 而填进 LLM 的 user 消息仍是原始 question——改写只改检索、不改回答意图。
+     */
+    searchQuery?: string;
   } = {},
 ): Promise<RAGResult> {
-  const { topK = 3, filter, threshold, rerank, rerankTopN = 20 } = options;
+  const { topK = 3, filter, threshold, rerank, rerankTopN = 20, searchQuery } = options;
+
+  // Day 47：检索用的查询——有改写用改写，没有则用原始问题
+  const retrieveQuery = searchQuery?.trim() ? searchQuery : question;
 
   // 1. Embedding 查询
-  const qVec = await embed(question);
+  const qVec = await embed(retrieveQuery);
 
   // 2. 粗排：向量检索。启用 Rerank 时把召回放宽到 rerankTopN（先广召回，再精排）；否则直接取 topK
   const store = new LocalVectorStore();
@@ -299,7 +307,7 @@ export async function ragQuery(
   let final: ScoredChunk[] = kept;
   if (rerank) {
     const scores = await rerank(
-      question,
+      retrieveQuery,
       kept.map((r) => ({ id: r.id, document: r.document })),
     );
     const order = rerankOrder(scores);

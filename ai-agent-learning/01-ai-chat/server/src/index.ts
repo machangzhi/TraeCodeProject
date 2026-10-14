@@ -4,6 +4,7 @@ import { chat, chatStream, type ChatMessage } from "./llm";
 import { runAgentStream } from "./agent/agent";
 import { addDocument, ingestDocuments, listDocuments, ragQuery } from "./rag/rag";
 import { lexicalRerank } from "./rag/rerank";
+import { rewriteQuery } from "./rag/rewrite";
 
 
 const app = express();
@@ -134,11 +135,14 @@ app.post("/api/agent/stream", async (req, res) => {
 //         故默认不启用：只有显式传 body.threshold 或设置 RAG_THRESHOLD 才过滤。
 // Day 46：新增 rerank 精排——粗排 TopN（默认 20）→ Rerank → TopK 送 LLM；默认开启，
 //         传 rerank:false 或 RAG_RERANK=0 可关闭（关闭即退回纯向量排序）。
-// POST /api/rag  body: { question, topK?, category?, threshold?, rerank?, rerankTopN? }
+// Day 47：新增 rewrite 查询改写——先让 LLM 把口语化问题改写成带实体锚点的检索式，再检索；
+//         默认关闭（每次查询多一次 LLM 调用），显式传 rewrite:true 或 RAG_REWRITE=1 开启。
+//         改写只作用于检索，最终回答的仍是用户原始问题。
+// POST /api/rag  body: { question, topK?, category?, threshold?, rerank?, rerankTopN?, rewrite? }
 // 返回 { answer, sources: [{ file, heading, distance, rerankScore? }], matched }
 app.post("/api/rag", async (req, res) => {
   try {
-    const { question, topK, category, threshold, rerank, rerankTopN } = req.body ?? {};
+    const { question, topK, category, threshold, rerank, rerankTopN, rewrite } = req.body ?? {};
     if (typeof question !== "string" || !question.trim()) {
       res.status(400).json({ error: "question 不能为空" });
       return;
@@ -153,12 +157,15 @@ app.post("/api/rag", async (req, res) => {
     const useRerank = !(rerank === false || process.env.RAG_RERANK === "0");
     const useRerankTopN =
       typeof rerankTopN === "number" && rerankTopN > 0 ? rerankTopN : 20;
+    const useRewrite = rewrite === true || process.env.RAG_REWRITE === "1";
+    const searchQuery = useRewrite ? (await rewriteQuery(question)).searchQuery : undefined;
     const result = await ragQuery(question, {
       topK: topK ?? 3,
       filter: category ? { category } : undefined,
       threshold: effectiveThreshold,
       rerank: useRerank ? lexicalRerank : undefined,
       rerankTopN: useRerankTopN,
+      searchQuery,
     });
     res.json(result);
   } catch (error) {
