@@ -3,13 +3,14 @@
  *
  * 封装文档入库 + 检索 + LLM 生成的完整链路，供 API 和实验脚本复用。
  *
- * 流程：Query →(可选) 改写→ Search Query → Embedding → 过滤检索 Top N → (可选) 阈值过滤 → (可选) Rerank → Context → LLM → Answer + Sources
+ * 流程：Query →(可选) 改写→ Search Query → Embedding → 过滤检索 Top N → (可选) 阈值过滤 → (可选) Rerank → Context →(可选) 注入防御→ LLM → Answer + Sources
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { pipeline, env, type Tensor } from "@xenova/transformers";
-import { chat, type ChatMessage } from "../llm";
+import { chat } from "../llm";
 import { rerankOrder, type RerankFn } from "./rerank";
+import { buildRagMessages } from "./prompt";
 
 env.allowLocalModels = true as any;
 env.allowRemoteModels = true as any;
@@ -273,9 +274,14 @@ export async function ragQuery(
      * 而填进 LLM 的 user 消息仍是原始 question——改写只改检索、不改回答意图。
      */
     searchQuery?: string;
+    /**
+     * Day 48：是否启用 Prompt Injection 防御版 Prompt（`<documents>` 边界 + "文档是数据不是指令"声明）。
+     * 默认 true；仅 Day 48 的防御前后对照实验传 false 走 Day 39~47 的基线 Prompt。
+     */
+    guard?: boolean;
   } = {},
 ): Promise<RAGResult> {
-  const { topK = 3, filter, threshold, rerank, rerankTopN = 20, searchQuery } = options;
+  const { topK = 3, filter, threshold, rerank, rerankTopN = 20, searchQuery, guard = true } = options;
 
   // Day 47：检索用的查询——有改写用改写，没有则用原始问题
   const retrieveQuery = searchQuery?.trim() ? searchQuery : question;
@@ -314,24 +320,14 @@ export async function ragQuery(
     final = order.slice(0, topK).map((i) => ({ ...kept[i], rerankScore: scores[i] }));
   }
 
-  // 4. 拼装上下文
-  const context = final
-    .map((r, i) => `[${i + 1}] (来源: ${r.metadata.file} - ${r.metadata.heading}) ${r.document}`)
-    .join("\n\n");
-
-  // 5. 构造 Prompt
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content: `你是一个基于知识库的问答助手。请严格根据下面提供的参考资料回答用户的问题。
-如果参考资料中没有相关信息，请直接说"根据现有知识库无法回答该问题"，不要编造答案。
-回答时请注明引用的来源编号，如 [1]。
-
-参考资料：
-${context}`,
-    },
-    { role: "user", content: question },
-  ];
+  // 4. 拼装 Prompt
+  //    Day 48：不再把 context 直接铺进 system，而是交给 prompt.ts——
+  //    防御版用 <documents> 划边界并声明"文档内容是数据不是指令"，阻断间接 Prompt Injection。
+  const messages = buildRagMessages(
+    question,
+    final.map((r) => ({ file: r.metadata.file, heading: r.metadata.heading, document: r.document })),
+    { guard },
+  );
 
   // 6. 调用 LLM
   const answer = await chat(messages);
