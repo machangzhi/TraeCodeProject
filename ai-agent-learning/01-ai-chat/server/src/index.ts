@@ -3,6 +3,7 @@ import express from "express";
 import { chat, chatStream, type ChatMessage } from "./llm";
 import { runAgentStream } from "./agent/agent";
 import { addDocument, ingestDocuments, listDocuments, ragQuery } from "./rag/rag";
+import { lexicalRerank } from "./rag/rerank";
 
 
 const app = express();
@@ -128,12 +129,16 @@ app.post("/api/agent/stream", async (req, res) => {
 
 // Day 39：RAG 知识库问答接口
 // Day 45：新增 threshold 相似度阈值——distance 高于阈值的召回视为无关内容；
-//         全部超阈值则直接短路拒答（不调 LLM）。默认取环境变量 RAG_THRESHOLD，缺省 0.7。
-// POST /api/rag  body: { question, topK?, category?, threshold? }
-// 返回 { answer, sources: [{ file, heading, distance }], matched }
+//         全部超阈值则直接短路拒答（不调 LLM）。
+//         Day 45 实验证明固定全局阈值（0.7）在本库净亏（可用阈值区间为空集），
+//         故默认不启用：只有显式传 body.threshold 或设置 RAG_THRESHOLD 才过滤。
+// Day 46：新增 rerank 精排——粗排 TopN（默认 20）→ Rerank → TopK 送 LLM；默认开启，
+//         传 rerank:false 或 RAG_RERANK=0 可关闭（关闭即退回纯向量排序）。
+// POST /api/rag  body: { question, topK?, category?, threshold?, rerank?, rerankTopN? }
+// 返回 { answer, sources: [{ file, heading, distance, rerankScore? }], matched }
 app.post("/api/rag", async (req, res) => {
   try {
-    const { question, topK, category, threshold } = req.body ?? {};
+    const { question, topK, category, threshold, rerank, rerankTopN } = req.body ?? {};
     if (typeof question !== "string" || !question.trim()) {
       res.status(400).json({ error: "question 不能为空" });
       return;
@@ -144,11 +149,16 @@ app.post("/api/rag", async (req, res) => {
         ? threshold
         : Number.isFinite(envThreshold)
           ? envThreshold
-          : 0.7;
+          : undefined;
+    const useRerank = !(rerank === false || process.env.RAG_RERANK === "0");
+    const useRerankTopN =
+      typeof rerankTopN === "number" && rerankTopN > 0 ? rerankTopN : 20;
     const result = await ragQuery(question, {
       topK: topK ?? 3,
       filter: category ? { category } : undefined,
       threshold: effectiveThreshold,
+      rerank: useRerank ? lexicalRerank : undefined,
+      rerankTopN: useRerankTopN,
     });
     res.json(result);
   } catch (error) {

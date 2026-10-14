@@ -3,12 +3,13 @@
  *
  * 封装文档入库 + 检索 + LLM 生成的完整链路，供 API 和实验脚本复用。
  *
- * 流程：Query → Embedding → 过滤检索 Top K → 拼装 Context → LLM → Answer + Sources
+ * 流程：Query → Embedding → 过滤检索 Top N → (可选) 阈值过滤 → (可选) Rerank → Context → LLM → Answer + Sources
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { pipeline, env, type Tensor } from "@xenova/transformers";
 import { chat, type ChatMessage } from "../llm";
+import { rerankOrder, type RerankFn } from "./rerank";
 
 env.allowLocalModels = true as any;
 env.allowRemoteModels = true as any;
@@ -246,6 +247,8 @@ export interface RAGSource {
   file: string;
   heading: string;
   distance: number;
+  /** Day 46：启用 Rerank 时该 chunk 的精排分数（越大越相关）；未启用则为 undefined */
+  rerankScore?: number;
 }
 
 export interface RAGResult {
@@ -257,19 +260,28 @@ export interface RAGResult {
 
 export async function ragQuery(
   question: string,
-  options: { topK?: number; filter?: MetadataFilter; threshold?: number } = {},
+  options: {
+    topK?: number;
+    filter?: MetadataFilter;
+    threshold?: number;
+    /** Day 46：精排打分器；不传则跳过 Rerank（纯向量排序） */
+    rerank?: RerankFn;
+    /** Day 46：粗排召回条数（重排的输入规模），默认 20；无重排时等于 topK */
+    rerankTopN?: number;
+  } = {},
 ): Promise<RAGResult> {
-  const { topK = 3, filter, threshold } = options;
+  const { topK = 3, filter, threshold, rerank, rerankTopN = 20 } = options;
 
   // 1. Embedding 查询
   const qVec = await embed(question);
 
-  // 2. 检索 Top K
+  // 2. 粗排：向量检索。启用 Rerank 时把召回放宽到 rerankTopN（先广召回，再精排）；否则直接取 topK
   const store = new LocalVectorStore();
-  const results = store.query(qVec, topK, filter);
+  const retrieveN = rerank ? Math.max(rerankTopN, topK) : topK;
+  const results = store.query(qVec, retrieveN, filter);
 
   // 2.5 Day 45：相似度阈值过滤——distance（=1-cosine）高于阈值的召回视为无关内容直接丢弃。
-  //     只认阈值不过滤 topK 本身：topK 决定"最多取几条"，阈值决定"够不够格留下"。
+  //     阈值作用在向量距离空间，是"防明显无关"的第一道闸，先于 Rerank 执行。
   const kept = typeof threshold === "number" ? results.filter((r) => r.distance <= threshold) : results;
 
   // 3. 一条都不够格：不调 LLM，直接短路返回，既省成本又避免用无关上下文硬凑答案
@@ -281,8 +293,21 @@ export async function ragQuery(
     };
   }
 
+  // 3.5 Day 46：精排。对粗排候选逐条打分后重排，再截到 topK——
+  //     关键收益是"把排位靠后的正确 chunk 提前"，这正是 Day 43/45 里 topK=3 召不回 C1/C6 gold 的解药。
+  type ScoredChunk = (typeof kept)[number] & { rerankScore?: number };
+  let final: ScoredChunk[] = kept;
+  if (rerank) {
+    const scores = await rerank(
+      question,
+      kept.map((r) => ({ id: r.id, document: r.document })),
+    );
+    const order = rerankOrder(scores);
+    final = order.slice(0, topK).map((i) => ({ ...kept[i], rerankScore: scores[i] }));
+  }
+
   // 4. 拼装上下文
-  const context = kept
+  const context = final
     .map((r, i) => `[${i + 1}] (来源: ${r.metadata.file} - ${r.metadata.heading}) ${r.document}`)
     .join("\n\n");
 
@@ -303,13 +328,14 @@ ${context}`,
   // 6. 调用 LLM
   const answer = await chat(messages);
 
-  // 7. 返回回答 + 来源
+  // 7. 返回回答 + 来源（保持精排后的顺序）
   return {
     answer,
-    sources: kept.map((r) => ({
+    sources: final.map((r) => ({
       file: r.metadata.file,
       heading: r.metadata.heading,
       distance: r.distance,
+      rerankScore: r.rerankScore,
     })),
     matched: true,
   };
