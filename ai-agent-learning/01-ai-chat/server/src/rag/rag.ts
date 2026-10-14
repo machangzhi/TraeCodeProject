@@ -251,13 +251,15 @@ export interface RAGSource {
 export interface RAGResult {
   answer: string;
   sources: RAGSource[];
+  /** Day 45：是否检索到通过相似度阈值的内容；false 表示直接短路拒答（未调用 LLM） */
+  matched: boolean;
 }
 
 export async function ragQuery(
   question: string,
-  options: { topK?: number; filter?: MetadataFilter } = {},
+  options: { topK?: number; filter?: MetadataFilter; threshold?: number } = {},
 ): Promise<RAGResult> {
-  const { topK = 3, filter } = options;
+  const { topK = 3, filter, threshold } = options;
 
   // 1. Embedding 查询
   const qVec = await embed(question);
@@ -266,12 +268,25 @@ export async function ragQuery(
   const store = new LocalVectorStore();
   const results = store.query(qVec, topK, filter);
 
-  // 3. 拼装上下文
-  const context = results
+  // 2.5 Day 45：相似度阈值过滤——distance（=1-cosine）高于阈值的召回视为无关内容直接丢弃。
+  //     只认阈值不过滤 topK 本身：topK 决定"最多取几条"，阈值决定"够不够格留下"。
+  const kept = typeof threshold === "number" ? results.filter((r) => r.distance <= threshold) : results;
+
+  // 3. 一条都不够格：不调 LLM，直接短路返回，既省成本又避免用无关上下文硬凑答案
+  if (kept.length === 0) {
+    return {
+      answer: "根据现有知识库无法回答该问题（未检索到相关内容）。",
+      sources: [],
+      matched: false,
+    };
+  }
+
+  // 4. 拼装上下文
+  const context = kept
     .map((r, i) => `[${i + 1}] (来源: ${r.metadata.file} - ${r.metadata.heading}) ${r.document}`)
     .join("\n\n");
 
-  // 4. 构造 Prompt
+  // 5. 构造 Prompt
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -285,16 +300,17 @@ ${context}`,
     { role: "user", content: question },
   ];
 
-  // 5. 调用 LLM
+  // 6. 调用 LLM
   const answer = await chat(messages);
 
-  // 6. 返回回答 + 来源
+  // 7. 返回回答 + 来源
   return {
     answer,
-    sources: results.map((r) => ({
+    sources: kept.map((r) => ({
       file: r.metadata.file,
       heading: r.metadata.heading,
       distance: r.distance,
     })),
+    matched: true,
   };
 }

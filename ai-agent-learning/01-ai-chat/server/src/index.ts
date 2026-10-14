@@ -127,18 +127,28 @@ app.post("/api/agent/stream", async (req, res) => {
 });
 
 // Day 39：RAG 知识库问答接口
-// POST /api/rag  body: { question, topK?, category? }
-// 返回 { answer, sources: [{ file, heading, distance }] }
+// Day 45：新增 threshold 相似度阈值——distance 高于阈值的召回视为无关内容；
+//         全部超阈值则直接短路拒答（不调 LLM）。默认取环境变量 RAG_THRESHOLD，缺省 0.7。
+// POST /api/rag  body: { question, topK?, category?, threshold? }
+// 返回 { answer, sources: [{ file, heading, distance }], matched }
 app.post("/api/rag", async (req, res) => {
   try {
-    const { question, topK, category } = req.body ?? {};
+    const { question, topK, category, threshold } = req.body ?? {};
     if (typeof question !== "string" || !question.trim()) {
       res.status(400).json({ error: "question 不能为空" });
       return;
     }
+    const envThreshold = Number(process.env.RAG_THRESHOLD);
+    const effectiveThreshold =
+      typeof threshold === "number" && Number.isFinite(threshold)
+        ? threshold
+        : Number.isFinite(envThreshold)
+          ? envThreshold
+          : 0.7;
     const result = await ragQuery(question, {
       topK: topK ?? 3,
       filter: category ? { category } : undefined,
+      threshold: effectiveThreshold,
     });
     res.json(result);
   } catch (error) {
